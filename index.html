@@ -3544,7 +3544,10 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
     let score = 5;
     const reasons = [];
     if (a.time && a.time === b.time) { score += 3; reasons.push([3, tx("mesmo clube ({time})", { time: selView(a).team })]); }
-    if (a.pais2 && a.pais2 === b.pais2 && a.pais2 !== "BR") { score += 1; reasons.push([1, tx("mesmo país ({pais})", { pais: selCountry(a) })]); }
+    if (a.pais2 && a.pais2 === b.pais2 && a.pais2 !== state.selData.casa) {  // compatriots abroad, not two locals
+      score += 1;
+      reasons.push([1, tx("mesmo país ({pais})", { pais: selCountry(a) })]);
+    }
     const fn = selFunctionPair(a, b);
     if (fn && fn[1]) { score += fn[0]; reasons.push(fn); }
     return { score: Math.max(0, Math.min(10, score)), reasons };
