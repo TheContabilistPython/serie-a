@@ -1400,7 +1400,7 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
       <header class="ooyl-card__head">
         <div class="ooyl-card__titles">
           <h2 class="ooyl-headline">Classificação</h2>
-          <p class="ooyl-sub">Pontos corridos calculados a partir das partidas coletadas. xG somado do shotmap. Clique num time para abrir a página dele.</p>
+          <p class="ooyl-sub">Pontos corridos calculados a partir das partidas coletadas. xG somado do shotmap ou, nos jogos sem ele, o das estatísticas da partida. Clique num time para abrir a página dele.</p>
         </div>
       </header>
       <div class="scroll"><table id="standings"></table></div>
@@ -1689,6 +1689,17 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
           </div>
         </header>
         <div id="sim-games"></div>
+      </section>
+      <section class="ooyl-card" id="sim-second" hidden>
+        <header class="ooyl-card__head">
+          <div class="ooyl-card__titles">
+            <h2 class="ooyl-headline">Segunda opinião: notas de desempenho</h2>
+            <p class="ooyl-sub">Um segundo modelo para os mesmos jogos. Cada time tem uma nota em casa e outra fora; depois de cada partida as notas dos dois lados andam o quanto ela surpreendeu, contando 25% do saldo de gols e 75% da diferença de xG. No teste com as rodadas já disputadas, os dois modelos erraram o mesmo tanto, e a média dos dois errou um pouco menos, uma diferença pequena o bastante para ser acaso. As chances de título, vaga e rebaixamento continuam vindo só do modelo do simulador.</p>
+          </div>
+        </header>
+        <div id="sim-second-games"></div>
+        <div class="round-name">Notas dos times · gols de vantagem sobre um time médio</div>
+        <div class="scroll"><table id="sim-second-table"></table></div>
       </section>
     </div>
   </section>
@@ -4053,6 +4064,41 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
         text: tx(block.round ? "Rodada {n} \u00b7 mandante, empate, visitante" : "Sem data definida \u00b7 mandante, empate, visitante", { n: block.round }) }));
       host.appendChild(el("div", { class: "ooyl-matches" }, block.matches.map(simMatchNode)));
     });
+    renderSimSecond(blocks);
+  }
+
+  // The second model (ratings.py) next to the simulator's: the chosen round's games by both and by their mean,
+  // then every team's rating. sim.second.games goes by "home id-away id"; a payload without it hides the card.
+  function renderSimSecond(blocks) {
+    const second = state.sim.second;
+    $("sim-second").hidden = !second;
+    if (!second) return;
+    const trio = (chances) => chances.map((p) => fmt(100 * p, 0)).join(" · ");
+    const signed = (v) => (v > 0 ? "+" : "") + fmt(v, 2);
+    const host = clear($("sim-second-games"));
+    blocks.forEach((block) => {
+      host.appendChild(el("div", { class: "round-name",
+        text: tx(block.round ? "Rodada {n} · mandante, empate e visitante, em %" : "Sem data definida · mandante, empate e visitante, em %", { n: block.round }) }));
+      host.appendChild(el("div", { class: "scroll" }, el("table", {},
+        el("thead", {}, el("tr", {}, ["Jogo", "Simulador", "Notas", "Média dos dois"].map((h, i) => el("th", { class: i ? "" : "left", text: h })))),
+        el("tbody", {}, block.matches.map((m) => {
+          const theirs = [m.pHome, m.pDraw, m.pAway], ours = second.games[`${m.home.id}-${m.away.id}`];
+          return el("tr", {},
+            el("td", { class: "left" }, crest(m.home), el("span", { text: `${m.home.short || m.home.name} x ${m.away.short || m.away.name}` })),
+            el("td", { text: trio(theirs) }), el("td", { text: ours ? trio(ours) : "-" }),
+            el("td", { class: "strong", text: ours ? trio(theirs.map((p, i) => (p + ours[i]) / 2)) : "-" }));
+        })))));
+    });
+    const table = clear($("sim-second-table"));
+    table.appendChild(el("thead", {}, el("tr", {}, ["#", "Time", "Em casa", "Fora", "Média"].map((h, i) =>
+      el("th", { class: i <= 1 ? "left" : "", text: h })))));
+    table.appendChild(el("tbody", {}, second.table.map((r, i) => el("tr", {
+      class: "row-link", title: "abrir o time", onclick: () => go(teamHref(r.team.id)),
+    },
+      el("td", { class: "left pos", text: String(i + 1) }),
+      el("td", { class: "left" }, crest(r.team), el("span", { text: r.team.name })),
+      el("td", { text: signed(r.home) }), el("td", { text: signed(r.away) }),
+      el("td", { class: "strong", text: signed(r.rating) })))));
   }
 
   // The model's pick (modelGuess) in an outlined box, the odds as one split bar. The single likeliest
@@ -4932,7 +4978,7 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
           { n: fmt(Math.abs(d), 1), lugar: ord(rank) }),
       at === mine.pos ? txn(" Na tabela do xG ficaria na mesma posição, em {lugar}.", { lugar: el("b", { text: ord(at) }) })
         : txn(" Na tabela do xG ficaria em {lugar}, e não em {real}.", { lugar: el("b", { text: ord(at) }), real: ord(mine.pos) }),
-      mine.xptsGames < mine.j ? tx(" (Em {n} dos {total} jogos: os outros não têm shotmap.)", { n: mine.xptsGames, total: mine.j }) : "");
+      mine.xptsGames < mine.j ? tx(" (Em {n} dos {total} jogos: os outros não trazem esse dado.)", { n: mine.xptsGames, total: mine.j }) : "");
     const table = el("table", { class: "xg-table numbers" },
       el("thead", {}, el("tr", {}, [{ h: "#", title: "Posição pela tabela do xG", left: true }, { h: "Time", left: true },
         { h: "Pelo xG", title: "Pontos que as chances valiam" }, { h: "Pontos", title: "Pontos de verdade, nos mesmos jogos" },
@@ -4946,7 +4992,7 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
         el("td", { text: fmt(r.xptsReal) }),
         el("td", { class: "shift" + (luck(r) >= 0.05 ? " is-better" : luck(r) <= -0.05 ? " is-worse" : ""), text: signed1(luck(r)) }),
         el("td", { class: "muted numbers__wide", text: ord(r.pos) })))));
-    host.appendChild(cardBox("Tabela do xG", "Os pontos que cada time teria se cada jogo terminasse como as chances dele: cada finalização vira gol com a chance do seu xG, e daí saem a vitória, o empate e a derrota de cada partida. Gols contra ficam de fora. A diferença é o que o time tem a mais (+) ou a menos (−) do que as chances valiam.",
+    host.appendChild(cardBox("Tabela do xG", "Os pontos que cada time teria se cada jogo terminasse como as chances dele: cada finalização vira gol com a chance do seu xG, e daí saem a vitória, o empate e a derrota de cada partida. Gols contra ficam de fora. Num jogo sem shotmap, a conta usa o xG total de cada lado. A diferença é o que o time tem a mais (+) ou a menos (−) do que as chances valiam.",
       lead, el("div", { class: "scroll" }, table)));
   }
 
@@ -5140,7 +5186,7 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
         gols: el("b", { text: tx("{n} dos {total} gols", { n: setFor, total: T.for }) }), pct: pct(setFor, T.for), n: topSet.n,
         tipo: tx(topSet.label).toLowerCase(), liga: pct(count(league, setKeys), T.league), contra: setAgainst, sofridos: T.against,
         pctContra: pct(setAgainst, T.against) }),
-      o.games < mine.j ? tx(" (Em {n} dos {total} jogos: os outros não têm shotmap.)", { n: o.games, total: mine.j }) : "");
+      o.games < mine.j ? tx(" (Em {n} dos {total} jogos: os outros não trazem esse dado.)", { n: o.games, total: mine.j }) : "");
 
     const scorers = el("div", {});
     const top = mine.scorers && mine.scorers.top[0];
@@ -5159,7 +5205,7 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
         open: (p) => (playerById(p.id) ? "#/jogador/" + p.id : null) });
       scorers.append(list);
     }
-    host.appendChild(cardBox("De onde saem os gols", "Cada gol pela jogada que o originou, pelo shotmap do SofaScore: bola rolando, contra-ataque ou bola parada (escanteio, falta, lateral e pênalti). Na liga é a parte dos gols de todo o campeonato que saiu de cada jeito. Ao lado, quem faz os gols do time.", lead,
+    host.appendChild(cardBox("De onde saem os gols", "Cada gol pela jogada que o originou, pelos dados do SofaScore: bola rolando, contra-ataque ou bola parada (escanteio, falta, lateral e pênalti). Na liga é a parte dos gols de todo o campeonato que saiu de cada jeito. Ao lado, quem faz os gols do time.", lead,
       el("div", { class: "team-pair" },
         el("div", {}, el("h3", { class: "group-name", text: "Origem dos gols" }), el("div", { class: "scroll" }, table)),
         el("div", {}, el("h3", { class: "group-name", text: "Quem faz os gols" }), scorers))));
@@ -6049,7 +6095,10 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
 
   function renderTeamShots(host, t) {
     const opt = state.teamShots;
-    const games = new Map(t.games.map((g) => [g.match, g]));
+    // A match imported without a shotmap has no shot on either side: it stays out of the count and of the picker.
+    const drawn = new Set(t.shots.map((s) => s.match));
+    const mapped = t.games.filter((g) => drawn.has(g.match) || g.against.shots > 0);
+    const games = new Map(mapped.map((g) => [g.match, g]));
     const game = (opt.match && games.get(Number(opt.match))) || null;
     if (!game) opt.match = "";
     const filter = SHOT_FILTERS.find((f) => f.key === opt.filter) || SHOT_FILTERS[0];
@@ -6065,14 +6114,15 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
 
     const pick = el("select", { "aria-label": "Jogo", onchange: (ev) => { opt.match = ev.target.value; renderTeamTab(); } },
       el("option", { value: "", text: "Temporada inteira" }),
-      t.games.slice().reverse().map((g) => el("option", { value: String(g.match), text: gameLabel(g) })));
+      mapped.slice().reverse().map((g) => el("option", { value: String(g.match), text: gameLabel(g) })));
     pick.value = opt.match;
     const sub = game
       ? txn("Rodada {rodada}, {lado}: {placar} contra {adversario}. xG {nosso} a {deles}.", { rodada: game.round ?? "?",
           lado: tx(game.home ? "em casa" : "fora"), placar: `${game.gf}–${game.ga}`, adversario: teamName(game.opponent),
           nosso: fmt(mine.xg, 2), deles: fmt(theirs.xg, 2) })
       : tx("{finalizacoes} em {jogos}, {xg} de xG. Escolha um jogo para ver só as dele.", {
-          finalizacoes: counted(mine.shots, "finalização", "finalizações"), jogos: counted(t.games.length, "jogo", "jogos"), xg: fmt(mine.xg, 1) });
+          finalizacoes: counted(mine.shots, "finalização", "finalizações"), jogos: counted(mapped.length, "jogo", "jogos"), xg: fmt(mine.xg, 1) })
+        + (mapped.length < t.games.length ? tx(" Sem shotmap: {jogos}.", { jogos: counted(t.games.length - mapped.length, "jogo", "jogos") }) : "");
     const card = el("section", { class: "ooyl-card team-shots" },
       el("header", { class: "ooyl-card__head" },
         el("div", { class: "ooyl-card__titles" }, el("h2", { class: "ooyl-headline", text: "Shotmap" }), el("p", { class: "ooyl-sub" }, sub)),
