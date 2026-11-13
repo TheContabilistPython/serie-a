@@ -1548,6 +1548,7 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
   <section id="view-arbitragem" class="view" hidden>
     <div class="ooyl-tabs ooyl-tabs--line ooyl-tabs--page" id="ref-tabs" role="tablist" aria-label="Arbitragem">
       <button class="ooyl-tab" role="tab" data-rtab="arbitros" aria-selected="true">Árbitros</button>
+      <button class="ooyl-tab" role="tab" data-rtab="var" aria-selected="false">VAR</button>
       <button class="ooyl-tab" role="tab" data-rtab="cartoes" aria-selected="false">Previsão de cartões</button>
     </div>
 
@@ -1575,6 +1576,34 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
           </div>
         </header>
         <div id="refs-chart"></div>
+      </section>
+    </div>
+
+    <!-- As revisoes do VAR: o que cada uma mudou e para quem, no mesmo payload dos arbitros -->
+    <div id="var-main" class="view" hidden>
+      <div class="ooyl-tiles" id="var-kpis"></div>
+
+      <section class="ooyl-card">
+        <header class="ooyl-card__head">
+          <div class="ooyl-card__titles">
+            <h2 class="ooyl-headline">VAR por time</h2>
+            <p class="ooyl-sub">Cada revisão do VAR que mudou a decisão do árbitro conta a favor de um time e contra o outro: gol validado ou anulado, pênalti marcado ou cancelado, expulsão dada ou retirada depois da revisão. O saldo é o que veio a favor menos o que veio contra. Uma revisão que manteve a decisão de campo entra só na coluna Revisões. É o registro do SofaScore, lance a lance; clique num time para ver as revisões dele.</p>
+          </div>
+        </header>
+        <div class="scroll"><table id="var-table"></table></div>
+      </section>
+
+      <section class="ooyl-card">
+        <header class="ooyl-card__head">
+          <div class="ooyl-card__titles">
+            <h2 class="ooyl-headline">Revisões de cada time</h2>
+            <p class="ooyl-sub">As revisões nos jogos do time escolhido, da mais recente para a mais antiga, com o que cada uma significou para ele. Clique numa linha para abrir a partida.</p>
+          </div>
+          <div class="ooyl-card__actions">
+            <span class="ooyl-field"><label class="ctl" for="var-team">Time</label><select id="var-team"></select></span>
+          </div>
+        </header>
+        <div class="scroll"><table id="var-list"></table></div>
       </section>
     </div>
 
@@ -1714,6 +1743,7 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
         <button class="ooyl-tab" role="tab" data-mtab="estatisticas" aria-selected="false">Estatísticas</button>
         <button class="ooyl-tab" role="tab" data-mtab="escalacoes" aria-selected="false">Escalações</button>
         <button class="ooyl-tab" role="tab" data-mtab="shotmap" aria-selected="false">Shotmap</button>
+        <button class="ooyl-tab" role="tab" data-mtab="gols" aria-selected="false">Gols</button>
       </div>
       <div id="match-body"></div>
     </section>
@@ -2609,11 +2639,6 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
     firstCard: { name: "Minuto do 1º cartão", phrase: "min até o primeiro cartão, em média", digits: 0, unit: "'", up: "Demora a dar cartão", down: "Cartão cedo" },
     awayGap: { name: "Cartões: visitante − mandante", digits: 1, signed: true, up: "Mais cartões ao visitante", down: "Mais cartões ao mandante" },
   };
-  const VAR_KINDS = {
-    goalAwarded: "Gol validado", goalNotAwarded: "Gol anulado", penaltyAwarded: "Pênalti marcado",
-    penaltyNotAwarded: "Pênalti não marcado", cardUpgrade: "Cartão agravado", redCardGiven: "Vermelho aplicado",
-    mistakenIdentity: "Jogador corrigido", other: "Outra decisão",
-  };
   const REF_TITLES = {
     J: "Partidas apitadas nesta temporada", "Cart./J": "Cartões por jogo, os da comissão técnica incluídos",
     A: "Amarelos", "Exp.": "Expulsões: segundo amarelo e vermelho direto", "Faltas/J": "Faltas marcadas por jogo",
@@ -2673,12 +2698,13 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
   }
 
   // Two sub-tabs: the referees (#/arbitragem) and the cards forecast (#/arbitragem/cartoes).
-  const RTABS = ["arbitros", "cartoes"];
+  const RTABS = ["arbitros", "var", "cartoes"];
   async function openReferees(tab = "arbitros") {
     state.rtab = tab;
     setView("arbitragem");
     syncTabs($("ref-tabs"), "rtab", tab);
     $("refs-main").hidden = tab !== "arbitros";
+    $("var-main").hidden = tab !== "var";
     $("cards-main").hidden = tab !== "cartoes";
     if (tab === "cartoes") { openCards(); return; }
     if (!state.refs) {
@@ -2692,6 +2718,61 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
       return;
     }
     if (state.view === "arbitragem" && state.rtab === "arbitros") renderReferees();
+    if (state.view === "arbitragem" && state.rtab === "var") renderVar();
+  }
+
+  // VAR: the reviews that changed a decision, for and against each team (the `var` of /api/referees).
+  const VAR_KINDS = { goalOn: "Gol validado", goalOff: "Gol anulado", penaltyOn: "Pênalti marcado", penaltyOff: "Pênalti cancelado",
+    redOn: "Expulsão após revisão", redOff: "Expulsão retirada", kept: "Decisão de campo mantida" };
+  const VAR_EFFECT = { goalOn: 1, penaltyOn: 1, redOff: 1, goalOff: -1, penaltyOff: -1, redOn: -1, kept: 0 };
+  let varTeam = null;  // the team whose reviews the second card lists
+  function renderVar() {
+    const d = state.refs.var, signed = (n) => (n > 0 ? "+" : n < 0 ? "−" : "") + fmt(Math.abs(n));
+    const table = clear($("var-table")), list = clear($("var-list")), pick = clear($("var-team"));
+    if (!d || !d.total) {
+      clear($("var-kpis"));
+      table.appendChild(el("tbody", {}, el("tr", {}, el("td", { class: "left", text: "Nenhuma revisão do VAR nas partidas coletadas." }))));
+      return;
+    }
+    const best = d.table[0], worst = d.table[d.table.length - 1];
+    tiles($("var-kpis"), [
+      ["Revisões do VAR", fmt(d.total), tx("em {n} dos {total} jogos", { n: fmt(d.reviewed), total: fmt(d.matches) })],
+      ["Decisões mudadas", fmt(d.changed), tx("{pct} das revisões", { pct: pctText(d.changed / d.total) })],
+      ["Mais favorecido", signed(best.net), teamName(best.team)],
+      ["Mais prejudicado", signed(worst.net), teamName(worst.team)],
+    ]);
+    const head = [["#", ""], ["Time", ""], ["Revisões", "Revisões do VAR nos jogos do time"], ["A favor", "Decisões mudadas a favor do time"],
+      ["Contra", "Decisões mudadas contra o time"], ["Saldo", "A favor menos contra"], ["Gols", "Saldo das revisões de gol"],
+      ["Pênaltis", "Saldo das revisões de pênalti"], ["Expulsões", "Saldo das revisões de expulsão"]];
+    table.appendChild(el("thead", {}, el("tr", {}, head.map(([h, title], i) => el("th", { class: i <= 1 ? "left" : "", text: h, title })))));
+    table.appendChild(el("tbody", {}, d.table.map((r, i) => el("tr", {
+      class: "row-link", title: "ver as revisões do time", onclick: () => { varTeam = r.team.id; renderVar(); },
+    },
+      el("td", { class: "left pos", text: String(i + 1) }),
+      el("td", { class: "left" }, crest(r.team), el("span", { text: r.team.name })),
+      el("td", { text: fmt(r.reviews) }), el("td", { text: fmt(r.for) }), el("td", { text: fmt(r.against) }),
+      el("td", { class: "strong", text: signed(r.net) }),
+      el("td", { text: signed(r.goals) }), el("td", { text: signed(r.penalties) }), el("td", { text: signed(r.reds) })))));
+
+    const teams = d.table.map((r) => r.team).sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    if (!teams.some((t) => t.id === varTeam)) varTeam = best.team.id;
+    teams.forEach((t) => pick.appendChild(el("option", { value: String(t.id), text: t.name })));
+    pick.value = String(varTeam);
+    pick.onchange = () => { varTeam = Number(pick.value); renderVar(); };
+    const mine = d.reviews.filter((v) => v.team === varTeam || v.rival === varTeam);
+    list.appendChild(el("thead", {}, el("tr", {}, ["Rod.", "Jogo", "Min.", "Decisão", "Lance de", "Jogador", "Para o time"].map((h, i) =>
+      el("th", { class: i === 0 || i === 2 ? "" : "left", text: h })))));
+    list.appendChild(el("tbody", {}, mine.length ? mine.map((v) => {
+      const effect = VAR_EFFECT[v.kind] * (v.team === varTeam ? 1 : -1), subject = v.team === v.home.id ? v.home : v.away;
+      return el("tr", { class: "row-link", title: "abrir a partida", onclick: () => go("#/partida/" + v.match) },
+        el("td", { text: v.round == null ? "-" : String(v.round) }),
+        el("td", { class: "left" }, el("span", { text: `${v.home.short || v.home.name} x ${v.away.short || v.away.name}` })),
+        el("td", { text: v.minute == null ? "-" : v.minute + (v.added ? "+" + v.added : "") + "'" }),
+        el("td", { class: "left", text: VAR_KINDS[v.kind] || v.kind }),
+        el("td", { class: "left" }, el("span", { text: subject.short || subject.name })),
+        el("td", { class: "left" }, el("span", { text: v.player || "-" })),
+        el("td", { class: "left" + (effect ? " strong" : ""), text: effect > 0 ? "a favor" : effect < 0 ? "contra" : "sem mudança" }));
+    }) : el("tr", {}, el("td", { class: "left", text: "Nenhuma revisão nos jogos deste time." }))));
   }
 
   async function openReferee(id) {
@@ -5716,6 +5797,7 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
     if (state.mtab === "resumo") return renderTimeline(host, m);
     if (state.mtab === "estatisticas") return renderStats(host, m);
     if (state.mtab === "escalacoes") return renderLineups(host, m);
+    if (state.mtab === "gols") return renderGoals(host, m);
     return renderShotmap(host, m);
   }
 
@@ -5943,6 +6025,71 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
   // depth: quantas unidades de comprimento mostrar a partir da linha de fundo. O campo
   // e cortado na profundidade real das finalizacoes da partida, entao a borda de baixo
   // fica aberta: ela e o limite da vista, nao uma linha do campo.
+  // Gols: each goal of the match with the play that led to it (the match's `goals`), on a whole pitch that always
+  // attacks to the right. Across the pitch it follows the shotmap, turned a quarter: the same touchline on the same side.
+  const STEP_LABEL = { pass: "passe", cross: "cruzamento", "ball-movement": "condução", goal: "finalização", "throw-in": "lateral",
+    save: "defesa", "ball-touch": "toque", miss: "finalização para fora", post: "trave", interception: "interceptação",
+    tackle: "desarme", clearance: "corte", block: "bloqueio", "penalty-save": "pênalti defendido" };
+  const FIELD = { W: 1050, H: 680 };  // a 105 x 68 m pitch, ten units a metre
+  function playSvg(goal) {
+    const { W, H } = FIELD, at = ([x, y]) => [x * W / 100, (100 - y) * H / 100];
+    const svg = el("svg", { class: "ooyl-shotmap__pitch", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Jogada do gol" });
+    svg.appendChild(el("rect", { x: 0, y: 0, width: W, height: H, rx: 10, style: "fill:var(--pitch)" }));
+    const box = (a) => el("rect", Object.assign({ class: "ooyl-shot-line" }, a));
+    svg.appendChild(box({ x: 2, y: 2, width: W - 4, height: H - 4, rx: 8 }));
+    svg.appendChild(el("line", { class: "ooyl-shot-line", x1: W / 2, x2: W / 2, y1: 2, y2: H - 2 }));
+    svg.appendChild(el("circle", { class: "ooyl-shot-line", cx: W / 2, cy: H / 2, r: 91.5 }));
+    [0, 1].forEach((right) => {
+      svg.appendChild(box({ x: right ? W - 167 : 2, y: (H - 403.2) / 2, width: 165, height: 403.2 }));
+      svg.appendChild(box({ x: right ? W - 57 : 2, y: (H - 183.2) / 2, width: 55, height: 183.2 }));
+      svg.appendChild(el("circle", { cx: right ? W - 110 : 110, cy: H / 2, r: 4, style: "fill:var(--pitch-line)" }));
+    });
+    svg.appendChild(el("line", { x1: W - 3, x2: W - 3, y1: H / 2 - 36.6, y2: H / 2 + 36.6, "stroke-width": 6, style: "stroke:var(--ink-muted)" }));
+    goal.steps.forEach((step, i) => {  // a carry says only where it started: it ends where the next touch begins
+      const next = goal.steps[i + 1], end = step.to || (next && next.from);
+      if (!end) return;
+      const [x1, y1] = at(step.from), [x2, y2] = at(end), shot = step.type === "goal", ink = css(step.isHome ? "--home" : "--away");
+      const stroke = { stroke: ink, "stroke-width": shot ? 9 : 5, "stroke-linecap": "round", "stroke-linejoin": "round", fill: "none" };
+      if (step.type === "ball-movement") stroke["stroke-dasharray"] = "2 15";
+      svg.appendChild(el("line", Object.assign({ x1, y1, x2, y2 }, stroke)));
+      if (Math.hypot(x2 - x1, y2 - y1) < 40) return;
+      const angle = Math.atan2(y2 - y1, x2 - x1), size = shot ? 28 : 19;
+      const wing = (turn) => `${x2 - size * Math.cos(angle + turn)} ${y2 - size * Math.sin(angle + turn)}`;
+      delete stroke["stroke-dasharray"];
+      svg.appendChild(el("path", Object.assign({ d: `M ${wing(0.45)} L ${x2} ${y2} L ${wing(-0.45)}` }, stroke)));
+    });
+    goal.steps.forEach((step, i) => {  // the numbered spots last, over the lines
+      const [x, y] = at(step.from), ink = css(step.isHome ? "--home" : "--away");
+      svg.appendChild(el("circle", { cx: x, cy: y, r: 21, fill: css("--pitch"), stroke: ink, "stroke-width": 4 }));
+      svg.appendChild(el("text", { x, y: y + 9, "text-anchor": "middle", "font-size": 25, "font-weight": 700, fill: ink }, String(i + 1)));
+    });
+    return svg;
+  }
+
+  function renderGoals(host, m) {
+    const goals = m.goals || [];
+    if (!goals.length) { host.appendChild(el("div", { class: "empty", text: "Partida sem gols." })); return; }
+    host.appendChild(el("p", { class: "ooyl-sub", text: "Cada gol com a jogada que o originou: passes e cruzamentos em linha cheia, condução pontilhada e a finalização em linha grossa. O campo está sempre virado para o ataque ir para a direita, e os números seguem a ordem dos toques." }));
+    goals.forEach((g) => {
+      const minute = g.time == null ? "" : g.time + (g.added ? "+" + g.added : "") + "'";
+      const words = [SITUATION[g.situation], BODY[g.body]].filter(Boolean).map((w) => tx(w));
+      if (g.xg != null) words.push("xG " + fmt(g.xg, 2));
+      host.appendChild(el("div", { class: "round-name" }, el("span", { text: `${minute} · ${g.homeScore ?? "?"}–${g.awayScore ?? "?"}` })));
+      host.appendChild(el("p", { style: "display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 var(--space-2)" },
+        crest(g.isHome ? m.home : m.away), el("b", {}, el("span", { text: g.player || "Gol" })),
+        g.class === "ownGoal" ? el("span", { class: "ooyl-tag", text: "Gol contra" })
+          : g.class === "penalty" ? el("span", { class: "ooyl-tag ooyl-tag--accent", text: "Pênalti" }) : null,
+        g.assist ? el("span", { class: "ooyl-tl__meta", text: tx("assist. {nome}", { nome: g.assist }) }) : null,
+        words.length ? el("span", { class: "ooyl-tl__meta" }, el("span", { text: words.join(", ") })) : null));
+      if (!g.steps.length) { host.appendChild(el("div", { class: "empty", text: "Os dados não trazem a jogada deste gol." })); return; }
+      host.appendChild(el("div", { style: "max-width:760px" }, playSvg(g)));
+      const passes = g.steps.filter((s) => s.type === "pass" || s.type === "cross" || s.type === "throw-in").length;
+      const touches = g.steps.map((s, i) => `${i + 1} ${s.player || "?"} (${tx(STEP_LABEL[s.type] || s.type)})`).join(" · ");
+      host.appendChild(el("p", { class: "ooyl-sub" }, el("span", {
+        text: tx("{passes} antes da finalização.", { passes: `${fmt(passes)} ${tx(passes === 1 ? "passe" : "passes")}` }) + " " + touches })));
+    });
+  }
+
   function pitchSvg(depth) {
     const { W, ux, uy } = PITCH;
     const H = depth * ux;
@@ -6844,7 +6991,7 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
     return ["Série A", state.index.year || state.index.season, rounds.length ? tx("R{n}", { n: rounds[rounds.length - 1].round }) : null]
       .filter(Boolean).join(" · ");
   };
-  const MTABS = ["resumo", "estatisticas", "escalacoes", "shotmap"];
+  const MTABS = ["resumo", "estatisticas", "escalacoes", "shotmap", "gols"];
   const go = (hash) => { if (location.hash === hash) applyHash(); else location.hash = hash; };
 
   // A team page goes by the team's slug, the one of its short address (dashboard.build_index `slugs`):
@@ -6974,7 +7121,7 @@ window.addEventListener("hashchange", () => window.goatcounter.count && window.g
   $("referee-back").addEventListener("click", () => go("#/arbitragem"));
   $("ref-tabs").addEventListener("click", (ev) => {
     const btn = ev.target.closest('[role="tab"]');
-    if (btn) go(btn.dataset.rtab === "cartoes" ? "#/arbitragem/cartoes" : "#/arbitragem");
+    if (btn) go(btn.dataset.rtab === "arbitros" ? "#/arbitragem" : "#/arbitragem/" + btn.dataset.rtab);
   });
   $("team-back").addEventListener("click", () => go("#/times"));
   $("sim-modes").addEventListener("click", (ev) => {
